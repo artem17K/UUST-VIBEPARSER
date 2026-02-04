@@ -239,7 +239,7 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
     html_style = f"""<style>
         body{{font-family:'Tahoma',serif;background-color:#fff;margin:0}}
         .multi-day-table{{width:100%;border-collapse:collapse;table-layout:fixed}}
-        .multi-day-table th,.multi-day-table td{{border:1px solid #000;padding:5px;text-align:center;vertical-align:top;font-size:13pt}}
+        .multi-day-table th,.multi-day-table td{{border:1px solid #000;padding:5px;text-align:center;vertical-align:middle;font-size:13pt}}
         .multi-day-table .time-cell {{ font-size: 16pt; vertical-align:middle; }}
         .room-text {{ font-size: 15pt; }}
         .subject-text {{ font-size: 15pt; }}
