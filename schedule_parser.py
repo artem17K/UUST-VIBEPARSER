@@ -10,28 +10,23 @@ import mimetypes
 
 # --- Настройки ---
 
-GROUP_NAME = "" # ВВЕДИТЕ НАЗВАНИЕ ГРУППЫ например "ПИ-101Б"
-API_URL = "https://isu.uust.ru/module/schedule/schedule_2024_script.php" # если поменяется надо будет поменять (надеюсь не поменяется)
+GROUP_NAME = ""  # ВВЕДИТЕ НАЗВАНИЕ ГРУППЫ например "ПИ-101Б"
+API_URL = "https://isu.uust.ru/module/schedule/schedule_2024_script.php"  # если поменяется надо будет поменять (надеюсь не поменяется)
 BASE_URL = "https://isu.uust.ru/schedule_2024/"
 
 # ОПЦИОНАЛЬНО
 # Укажите свой учебный план (необязательно, только для функции подсчёта оставшихся часов)
 PLANNED_CLASSES = {
-    "Базы данных": {"Лекция": 18, "Практика": 0, "Лабораторная": 18},
-    "Интернет-программирование": {"Лекция": 9, "Практика": 0, "Лабораторная": 18},
-    "Математические методы принятия решений": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Нечеткая логика": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Разработка Web-приложений": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Численные методы решения экстремальных задач": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Комплексный и функциональный анализ": {"Лекция": 18, "Практика": 0, "Лабораторная": 18},
-    "Теория вероятностей и математическая статистика": {"Лекция": 9, "Практика": 9, "Лабораторная": 18},
-    "Программная инженерия": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Проектирование информационных систем": {"Лекция": 9, "Практика": 0, "Лабораторная": 18},
-    "Вычислительные методы и программирование": {"Лекция": 9, "Практика": 0, "Лабораторная": 9},
-    "Информационная безопасность": {"Лекция": 6, "Практика": 0, "Лабораторная": 12},
-    "Информационное право": {"Лекция": 9, "Практика": 9, "Лабораторная": 0},
-    "Общая физическая подготовка": {"Лекция": 0, "Практика": 11, "Лабораторная": 0},
-    "Военная подготовка": {"Практика": 36, "Лекция": 0, "Лабораторная": 0},
+    "Теория вероятностей и математическая статистика": {"Лекция": 16, "Практика": 32, "Лабораторная": 0},
+    "Математическое программирование": {"Лекция": 16, "Практика": 32, "Лабораторная": 0},
+    "Теория систем и системный анализ": {"Лекция": 16, "Практика": 32, "Лабораторная": 0},
+    "Проектирование информационных систем": {"Лекция": 16, "Практика": 32, "Лабораторная": 0},
+    "Разработка программных приложений": {"Лекция": 16, "Практика": 48, "Лабораторная": 0},
+    "Проектный практикум": {"Лекция": 16, "Практика": 16, "Лабораторная": 0},
+    "Общая физическая подготовка": {"Лекция": 0, "Практика": 0, "Лабораторная": 22},
+    "Базы данных": {"Лекция": 32, "Практика": 32, "Лабораторная": 0},
+    "Разработка Web-приложений": {"Лекция": 16, "Практика": 48, "Лабораторная": 0},
+    "Кроссплатформенные приложения": {"Лекция": 16, "Практика": 32, "Лабораторная": 0}
 }
 
 # Настройки хранения файлов
@@ -254,10 +249,15 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         .teacher-name {{ position: absolute; bottom: 5px; left: 0; right: 0; width: 100%; font-size: 13pt; color: #444; }}
         .day-header {{ font-weight:700; position: relative; }}
         .date-badge {{ position: absolute; top: 6px; right: 5px; font-size: 12pt; font-weight: 700; background-color: rgba(255,255,255,0.7); padding: 0 3px; border-radius: 4px; }}
-        .multi-day-table td.multi-lesson{{padding:0}}
+        .multi-day-table td.multi-lesson{{ padding: 0 !important; }}
         .nested-table{{width:100%;height:100%;border-collapse:collapse}}
         .nested-table td{{border:none;padding:5px;vertical-align:middle}}
         .nested-row{{border-bottom:1px solid #000}}
+        .nested-table .teacher-name {{
+            position: static; 
+            margin-top: 5px; 
+            padding-bottom: 2px;
+        }}
         .multi-day-table.thick-border-bottom{{border-bottom:1px solid #000}}
         .multi-day-table .day-header,.multi-day-table .date-pair-header{{border-bottom:2px solid #000}}
         .multi-day-table .thick-border-right{{border-right:2px solid #000}}
@@ -448,7 +448,8 @@ def count_all_classes(group_name: str, session: requests.Session):
     try:
         current_week = calculate_academic_week()
     except Exception as e:
-        print(f"❌ Не удалось рассчитать номер текущей недели: {e}"); return
+        print(f"❌ Не удалось рассчитать номер текущей недели: {e}");
+        return
 
     class_counts = {}
 
@@ -529,9 +530,9 @@ def count_all_classes(group_name: str, session: requests.Session):
 def main():
     session = requests.Session()
     session.headers.update({
-                               'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                               'Referer': BASE_URL, 'X-Requested-With': 'XMLHttpRequest',
-                               'Origin': 'https://isu.uust.ru'})
+        'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': BASE_URL, 'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://isu.uust.ru'})
 
     print("\n" + "=" * 40);
     print("Выберите действие:");
@@ -551,7 +552,8 @@ def main():
                 current_schedule, date_map = parse_schedule_from_js(schedule_html)
                 print("📊 Расписание успешно собрано.")
             except ValueError as e:
-                print(f"❌ Ошибка парсинга: {e}"); break
+                print(f"❌ Ошибка парсинга: {e}");
+                break
 
             military_day_info = {}
             military_day_name = find_military_day(current_schedule)
@@ -606,7 +608,8 @@ def main():
             print("=" * 40)
             break
         elif choice == '2':
-            count_all_classes(GROUP_NAME, session); break
+            count_all_classes(GROUP_NAME, session);
+            break
         else:
             print("❗️Неверный ввод. Пожалуйста, введите 1 или 2.")
     print("\n🎉 Работа завершена!")
