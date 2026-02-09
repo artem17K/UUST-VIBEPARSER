@@ -167,14 +167,13 @@ def find_military_day(schedule_data: dict) -> str | None:
     return None
 
 
-def parse_schedule_from_js(html_content: str) -> tuple[dict, dict]:
+def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> tuple[dict, dict]:
     soup = BeautifulSoup(html_content, "html.parser")
     temp_schedule_data = {}
     schedule_table = soup.find("table", class_="table table-bordered")
     if not schedule_table: raise ValueError("Таблица расписания не найдена в HTML.")
 
     headers = schedule_table.find("thead").find_all("th")
-
     days = []
     day_date_map = {}
 
@@ -190,9 +189,17 @@ def parse_schedule_from_js(html_content: str) -> tuple[dict, dict]:
             days.append(day_name)
             day_date_map[day_name] = ""
 
-    time_map = {c[0].get_text(strip=True): c[1].get_text(strip=True)
-                for r in schedule_table.find_all("tr") if
-                (c := r.find_all("td")) and len(c) > 1 and c[0].get_text(strip=True).isdigit()}
+    pair_num_to_time = {}
+    time_to_pair_num = {}
+
+    rows = schedule_table.find_all("tr")
+    for r in rows:
+        cols = r.find_all("td")
+        if len(cols) > 1 and cols[0].get_text(strip=True).isdigit():
+            p_num = int(cols[0].get_text(strip=True))
+            p_time = cols[1].get_text(strip=True)
+            pair_num_to_time[str(p_num)] = p_time
+            time_to_pair_num[p_time] = p_num
 
     pattern = re.compile(r"\$\('#(\d+_\d+_group)'\)\.append\('(.*?)'\);", re.DOTALL)
 
@@ -204,26 +211,83 @@ def parse_schedule_from_js(html_content: str) -> tuple[dict, dict]:
             pair_num_str, day_idx_str, _ = cell_id.split('_')
             day_idx = int(day_idx_str) - 1
 
-            if day_idx < len(days) and pair_num_str in time_map:
+            if day_idx < len(days) and pair_num_str in pair_num_to_time:
                 day_name = days[day_idx]
                 lesson_soup = BeautifulSoup(content_html, "html.parser")
+
                 lines = [line for line in lesson_soup.get_text(separator='\n', strip=True).split('\n') if line]
                 if not lines: continue
 
-                specific_time = lines.pop() if lines and re.match(r'^В \d{1,2}:\d{2}$', lines[-1].strip()) else None
-                subject = lines.pop(0) if lines else ""
+                specific_time = None
+                if lines and re.match(r'^В \d{1,2}:\d{2}$', lines[-1].strip()):
+                    specific_time = lines.pop().strip()
+
+                subgroup = ""
+                cleaned_lines = []
+                for line in lines:
+                    if re.search(r'подгруппа\s*\d+', line, re.IGNORECASE):
+                        subgroup = line.strip().lower()
+                    else:
+                        cleaned_lines.append(line)
+                lines = cleaned_lines
+
+                raw_subject = lines.pop(0) if lines else ""
+                m = re.match(r'(.+?)\s*\(.+\)', raw_subject)
+                subject_clean_name = m.groups()[0].strip() if m else raw_subject.strip()
+
                 teacher = lines.pop(0) if lines else ""
                 room_raw = " ".join(lines).strip()
 
                 lesson = {
-                    "time": time_map[pair_num_str],
-                    "subject": subject,
+                    "time": pair_num_to_time[pair_num_str],
+                    "subject": raw_subject,
+                    "subject_clean": subject_clean_name,  # Сохраняем чистое имя
                     "teacher": teacher,
                     "room": room_raw,
-                    "specific_time": specific_time
+                    "specific_time": specific_time,
+                    "subgroup": subgroup
                 }
-                if 'дистант' in lesson_soup.get_text().lower(): lesson['room'] = 'Дистант'
+
+                if 'дистант' in lesson_soup.get_text().lower():
+                    lesson['room'] = 'Дистант'
+
                 temp_schedule_data.setdefault(day_name, []).append(lesson)
+
+    for day in temp_schedule_data:
+        lessons_by_time = {}
+        for l in temp_schedule_data[day]:
+            lessons_by_time.setdefault(l['time'], []).append(l)
+
+        sorted_times = sorted(lessons_by_time.keys(), key=lambda t: time_to_pair_num.get(t, 0))
+
+        daily_subject_assignments = {}
+        split_counter = 0
+
+        for t in sorted_times:
+            lessons = lessons_by_time[t]
+            if len(lessons) == 2 and not lessons[0]['subgroup'] and not lessons[1]['subgroup']:
+                split_counter += 1
+
+                lessons.sort(key=lambda x: x['subject_clean'])
+                sub1, sub2 = lessons[0], lessons[1]
+
+                sub1_prev_sg = daily_subject_assignments.get(sub1['subject_clean'])
+                sub2_prev_sg = daily_subject_assignments.get(sub2['subject_clean'])
+
+                first_subject_sg = -1
+
+                if sub1_prev_sg:
+                    first_subject_sg = 3 - sub1_prev_sg
+                elif sub2_prev_sg:
+                    first_subject_sg = sub2_prev_sg
+                else:
+                    parity = (int(current_week_number) + split_counter) % 2
+                    first_subject_sg = 1 if parity == 0 else 2
+                sub1['subgroup'] = f"подгруппа {first_subject_sg}"
+                sub2['subgroup'] = f"подгруппа {3 - first_subject_sg}"
+
+                daily_subject_assignments[sub1['subject_clean']] = first_subject_sg
+                daily_subject_assignments[sub2['subject_clean']] = 3 - first_subject_sg
 
     DAYS_ORDER = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     final_schedule = {day: sorted(temp_schedule_data.get(day, []), key=lambda x: x['time']) for day in DAYS_ORDER if
@@ -233,13 +297,21 @@ def parse_schedule_from_js(html_content: str) -> tuple[dict, dict]:
 
 
 def create_schedule_image(schedule_data, day_date_map, image_filename, military_day_info=None):
-    TIME_COL_WIDTH, DAY_COL_WIDTH = "80px", "325px"
+    TIME_COL_WIDTH, DAY_COL_WIDTH = "80px", "550px"
     TOTAL_IMAGE_WIDTH = (int(TIME_COL_WIDTH.replace('px', '')) + int(DAY_COL_WIDTH.replace('px', ''))) * 3
 
     html_style = f"""<style>
-        body{{font-family:'Tahoma',serif;background-color:#fff;margin:0}}
+        body{{font-family:'Tahoma',serif;background-color:#fff;margin:0;padding:0}}
         .multi-day-table{{width:100%;border-collapse:collapse;table-layout:fixed}}
-        .multi-day-table th,.multi-day-table td{{border:1px solid #000;padding:5px;text-align:center;vertical-align:middle;font-size:13pt}}
+
+        .multi-day-table th,.multi-day-table td{{
+            border:1px solid #000;
+            padding:5px;
+            text-align:center;
+            vertical-align:middle;
+            font-size:13pt;
+        }}
+
         .multi-day-table .time-cell {{ font-size: 16pt; vertical-align:middle; }}
         .room-text {{ font-size: 15pt; }}
         .subject-text {{ font-size: 15pt; }}
@@ -249,18 +321,48 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         .teacher-name {{ position: absolute; bottom: 5px; left: 0; right: 0; width: 100%; font-size: 13pt; color: #444; }}
         .day-header {{ font-weight:700; position: relative; }}
         .date-badge {{ position: absolute; top: 6px; right: 5px; font-size: 12pt; font-weight: 700; background-color: rgba(255,255,255,0.7); padding: 0 3px; border-radius: 4px; }}
-        .multi-day-table td.multi-lesson{{ padding: 0 !important; }}
-        .nested-table{{width:100%;height:100%;border-collapse:collapse}}
-        .nested-table td{{border:none;padding:5px;vertical-align:middle}}
-        .nested-row{{border-bottom:1px solid #000}}
-        .nested-table .teacher-name {{
-            position: static; 
-            margin-top: 5px; 
-            padding-bottom: 2px;
+
+        .multi-day-table td.split-lesson {{ 
+            padding: 0 !important;
+            margin: 0;
+            height: 136px;
         }}
+
+        .split-cell-table {{ 
+            width: 100%;
+            height: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin: 0;
+            padding: 0;
+            border: none;
+            border-spacing: 0;
+            display: table;
+        }}
+
+        .split-cell-table tr {{
+            height: 100%;
+        }}
+
+        .subgroup-cell {{ 
+            width: 50%;
+            padding: 5px;
+            padding-bottom: 30px !important;
+            vertical-align: middle;
+            position: relative;
+            border: none !important;
+            margin: 0;
+            box-sizing: border-box;
+            height: 100%;
+        }}
+        .sg-left {{ 
+            border-right: 1px solid #000 !important;
+        }}
+
         .multi-day-table.thick-border-bottom{{border-bottom:1px solid #000}}
         .multi-day-table .day-header,.multi-day-table .date-pair-header{{border-bottom:2px solid #000}}
         .multi-day-table .thick-border-right{{border-right:2px solid #000}}
+
         .lesson-row{{height:136px}}
         .lecture-bg{{background-color:#DDEBF7}}
         .practice-bg{{background-color:#FCE4D6}}
@@ -311,31 +413,54 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         if 'лабораторная' in type_str_lower: return "(Лаба)"
         return ""
 
+    def format_lesson_content(l):
+        if 'военная подготовка' in l['subject'].lower():
+            return f"<div style='padding-top: 20px; color: #000;'><span class='subject-text'><strong>Военная подготовка</strong></span></div>"
+
+        m = re.match(r'(.+?)\s*\((.+)\)', l['subject'])
+        subject_name, subject_type_raw = m.groups() if m else (l['subject'], '')
+        type_html = f"<br><span class='lesson-type-text'>{get_lesson_type_formatted(subject_type_raw)}</span>" if subject_type_raw else ""
+        room = format_room_text(l['room'])
+        specific_time_html = f"<div class='specific-time'>{l['specific_time']}</div>" if l.get('specific_time') else ""
+        room_html = f"<span class='room-text'>{room}</span>" if room else ""
+        separator = "" if (specific_time_html) else "<br>"
+        main_content_html = (
+            f"<br><span class='subject-text'><strong>{subject_name.strip()}</strong></span>"
+            f"{type_html}"
+            f"{specific_time_html}"
+            f"{separator}"
+            f"{room_html}"
+        )
+        teacher_html = f"<div class='teacher-name'>{l['teacher']}</div>" if l.get('teacher') and l[
+            'teacher'].strip() not in ('N/A', '') else ""
+        return main_content_html + teacher_html
+
     def generate_lesson_cell_html(lessons):
-        def format_lesson_content(l):
-            if 'военная подготовка' in l['subject'].lower():
-                return f"<div style='padding-top: 20px; color: #000;'><span class='subject-text'><strong>Военная подготовка</strong></span></div>"
+        lesson_sg1 = next((l for l in lessons if 'подгруппа 1' in l.get('subgroup', '')), None)
+        lesson_sg2 = next((l for l in lessons if 'подгруппа 2' in l.get('subgroup', '')), None)
 
-            m = re.match(r'(.+?)\s*\((.+)\)', l['subject'])
-            subject_name, subject_type_raw = m.groups() if m else (l['subject'], '')
-            type_html = f"<br><span class='lesson-type-text'>{get_lesson_type_formatted(subject_type_raw)}</span>" if subject_type_raw else ""
-            room = format_room_text(l['room'])
-            specific_time_html = f"<div class='specific-time'>{l['specific_time']}</div>" if l.get(
-                'specific_time') else ""
-            room_html = f"<span class='room-text'>{room}</span>" if room else ""
-            main_content_html = f"<br><span class='subject-text'><strong>{subject_name.strip()}</strong></span>{type_html}{specific_time_html}{'' if specific_time_html else '<br>'}{room_html}"
-            teacher_html = f"<div class='teacher-name'>{l['teacher']}</div>" if l.get('teacher') and l[
-                'teacher'].strip() not in ('N/A', '') else ""
-            return main_content_html + teacher_html
+        if not lesson_sg1 and not lesson_sg2:
+            if not lessons: return ''
+            return format_lesson_content(lessons[0])
 
-        if not lessons: return ''
-        if len(lessons) == 1: return format_lesson_content(lessons[0])
-        h = '<table class="nested-table">'
-        t, b = lessons[0], lessons[1]
-        h += f'<tr class="nested-row {get_lesson_color_class(t["subject"])}"><td>{format_lesson_content(t)}</td></tr>'
-        h += f'<tr class="{get_lesson_color_class(b["subject"])}"><td>{format_lesson_content(b)}</td></tr>'
-        h += '</table>'
-        return h
+        html = '<table class="split-cell-table"><tr>'
+
+        if lesson_sg1:
+            bg_class = get_lesson_color_class(lesson_sg1['subject'])
+            content = format_lesson_content(lesson_sg1)
+            html += f'<td class="subgroup-cell sg-left {bg_class}">{content}</td>'
+        else:
+            html += '<td class="subgroup-cell sg-left default-bg"></td>'
+
+        if lesson_sg2:
+            bg_class = get_lesson_color_class(lesson_sg2['subject'])
+            content = format_lesson_content(lesson_sg2)
+            html += f'<td class="subgroup-cell {bg_class}">{content}</td>'
+        else:
+            html += '<td class="subgroup-cell default-bg"></td>'
+
+        html += '</tr></table>'
+        return html
 
     def get_visible_times_for_days(days, times, data):
         idx = -1
@@ -349,11 +474,9 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
                             has_lesson = True
                             break
                 if has_lesson: break
-
             if has_lesson:
                 idx = i
                 break
-
         if idx == -1: return []
         return times[:idx + 1]
 
@@ -385,10 +508,18 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
 
                 h += f'<td class="time-cell">{t.replace("-", "<br>-<br>")}</td>'
                 ls = [l for l in data.get(d, []) if l['time'] == t]
+                ls.sort(key=lambda x: x.get('subgroup', ''))
                 cls = ["lesson-cell"]
                 cls.append("thick-border-right" if i < len(days) - 1 else "")
-                cls.append(
-                    "multi-lesson" if len(ls) > 1 else get_lesson_color_class(ls[0]['subject']) if ls else "default-bg")
+
+                has_subgroups = any('подгруппа' in l.get('subgroup', '') for l in ls)
+                if has_subgroups:
+                    cls.append("split-lesson")
+                elif ls:
+                    cls.append(get_lesson_color_class(ls[0]['subject']))
+                else:
+                    cls.append("default-bg")
+
                 h += f'<td class="{" ".join(cls)}">{generate_lesson_cell_html(ls)}</td>'
             h += '</tr>'
         h += "</tbody></table>"
@@ -407,7 +538,6 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         imgkit.from_string(full_html, image_filename, options=options, config=config)
     except Exception as e:
         print(f"❌ Ошибка при создании изображения: {e}\n    Убедись, что путь в WKHTMLTOIMAGE_PATH указан верно.")
-
 
 def get_latest_schedule_file(group_name: str) -> str | None:
     if not os.path.exists(JSON_DIR): return None
@@ -469,14 +599,14 @@ def count_all_classes(group_name: str, session: requests.Session):
         match = re.match(r'(.+?)\s*\(.+\)', subject_full)
         return match.groups()[0].strip() if match else subject_full.strip()
 
-    for week_num in range(1, current_week + 1):
+    for week_num in range(24, current_week + 1):
         print(f"    - Обрабатываю неделю №{week_num} из {current_week}...")
         schedule_html = get_schedule_html(group_id, str(week_num), session)
         if not schedule_html:
             print(f"    ⚠️ Не удалось получить расписание для недели №{week_num}. Пропускаю.");
             continue
         try:
-            weekly_schedule, _ = parse_schedule_from_js(schedule_html)
+            weekly_schedule, _ = parse_schedule_from_js(schedule_html, week_num)
         except ValueError:
             print(f"    ℹ️ На неделе №{week_num} нет пар или не удалось ее распарсить.");
             continue
@@ -549,7 +679,7 @@ def main():
             schedule_html = get_schedule_html(group_id, selected_week_id, session)
             if not schedule_html: break
             try:
-                current_schedule, date_map = parse_schedule_from_js(schedule_html)
+                current_schedule, date_map = parse_schedule_from_js(schedule_html, int(selected_week_id))
                 print("📊 Расписание успешно собрано.")
             except ValueError as e:
                 print(f"❌ Ошибка парсинга: {e}");
