@@ -1,5 +1,7 @@
 import re
 from bs4 import BeautifulSoup
+from config import SUBJECTS_TO_ALTERNATE
+
 
 def find_military_day(schedule_data: dict) -> str | None:
     military_keywords = ["военная подготовка", "военная кафедра", "вуц"]
@@ -10,6 +12,7 @@ def find_military_day(schedule_data: dict) -> str | None:
                 return day
     return None
 
+
 def get_lesson_type(subject_str):
     s = subject_str.lower()
     if 'военная подготовка' in s or 'вуц' in s: return "Практика"
@@ -19,12 +22,60 @@ def get_lesson_type(subject_str):
     if 'лабораторная' in s or 'лаб.' in s: return "Лабораторная"
     return "Другое"
 
+
 def get_subject_name(subject_full):
     s_lower = subject_full.lower()
     if 'военная подготовка' in s_lower or 'вуц' in s_lower:
         return "Военная подготовка"
     match = re.match(r'(.+?)\s*\(.+\)', subject_full)
     return match.groups()[0].strip() if match else subject_full.strip()
+
+def apply_lab_alternation(final_schedule, current_week_number: int):
+    def get_sg_num(lesson):
+        sg_str = lesson.get('subgroup', '').lower()
+        if 'подгруппа 1' in sg_str: return 1
+        if 'подгруппа 2' in sg_str: return 2
+        return 0  # Нет подгруппы (или обе)
+
+    for day, lessons in final_schedule.items():
+        if len(lessons) < 2:
+            continue
+
+        sequence_counter = 0
+
+        i = 0
+        while i < len(lessons) - 1:
+            curr = lessons[i]
+            next_l = lessons[i + 1]
+
+            if (curr['subject_clean'] != next_l['subject_clean'] or
+                    curr['subject_clean'] not in SUBJECTS_TO_ALTERNATE):
+                i += 1
+                continue
+
+            if 'лаб' not in curr['subject'].lower() or 'лаб' not in next_l['subject'].lower():
+                i += 1
+                continue
+
+            sg1 = get_sg_num(curr)
+            sg2 = get_sg_num(next_l)
+
+            if sg1 == 0 and sg2 == 0:
+                parity = (current_week_number + sequence_counter) % 2
+                start_sg = 1 if parity != 0 else 2
+
+                curr['subgroup'] = f'подгруппа {start_sg}'
+                next_l['subgroup'] = f'подгруппа {3 - start_sg}'
+
+                sequence_counter += 1
+            elif sg1 != 0 and sg2 == 0:
+                next_l['subgroup'] = f'подгруппа {3 - sg1}'
+
+            elif sg1 == 0 and sg2 != 0:
+                curr['subgroup'] = f'подгруппа {3 - sg2}'
+            i += 1
+
+    return final_schedule
 
 def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> tuple[dict, dict]:
     soup = BeautifulSoup(html_content, "html.parser")
@@ -148,5 +199,7 @@ def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> t
     DAYS_ORDER = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     final_schedule = {day: sorted(temp_schedule_data.get(day, []), key=lambda x: x['time']) for day in DAYS_ORDER if
                       day in temp_schedule_data or day in day_date_map}
+
+    final_schedule = apply_lab_alternation(final_schedule, int(current_week_number))
 
     return final_schedule, day_date_map
