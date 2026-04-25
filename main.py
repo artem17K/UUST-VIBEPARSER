@@ -77,7 +77,7 @@ def main():
             schedule_html = get_schedule_html(group_id, selected_week_id, session)
             if not schedule_html: break
             try:
-                current_schedule, date_map = parse_schedule_from_js(schedule_html, int(selected_week_id))
+                current_schedule, date_map, pair_num_to_time = parse_schedule_from_js(schedule_html, int(selected_week_id))
                 print("📊 Расписание успешно собрано.")
             except ValueError as e:
                 print(f"❌ Ошибка парсинга: {e}");
@@ -126,7 +126,7 @@ def main():
             print(f"\n💾 Расписание сохранено в: {json_filename}")
 
             if any(current_schedule.values()):
-                create_schedule_image(current_schedule, date_map, image_filename, military_day_info=military_day_info)
+                create_schedule_image(current_schedule, date_map, image_filename, military_day_info=military_day_info, pair_num_to_time=pair_num_to_time)
                 print(f"🖼️ Изображение расписания сохранено в: {image_filename}")
             else:
                 print("🖼️ Расписание пустое.")
