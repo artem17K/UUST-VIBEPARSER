@@ -202,4 +202,4 @@ def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> t
 
     final_schedule = apply_lab_alternation(final_schedule, int(current_week_number))
 
-    return final_schedule, day_date_map
+    return final_schedule, day_date_map, pair_num_to_time

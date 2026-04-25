@@ -2,9 +2,9 @@ import imgkit
 import re
 from config import WKHTMLTOIMAGE_PATH
 
-def create_schedule_image(schedule_data, day_date_map, image_filename, military_day_info=None):
+def create_schedule_image(schedule_data, day_date_map, image_filename, military_day_info=None, pair_num_to_time=None):
     TIME_COL_WIDTH, DAY_COL_WIDTH = "80px", "550px"
-    TOTAL_IMAGE_WIDTH = (int(TIME_COL_WIDTH.replace('px', '')) + int(DAY_COL_WIDTH.replace('px', ''))) * 3
+    TOTAL_IMAGE_WIDTH = (int(TIME_COL_WIDTH.replace('px', '')) + int(DAY_COL_WIDTH.replace('px', ''))) * 3 + 2  # +2 чтобы правая граница не обрезалась
 
     html_style = f"""<style>
         body{{font-family:'Tahoma',serif;background-color:#fff;margin:0;padding:0}}
@@ -38,7 +38,10 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         .image-cell{{padding:0;background-size:cover;background-position:center;background-repeat:no-repeat}}
     </style>"""
 
-    all_times = sorted(list(set(l['time'] for day in schedule_data.values() for l in day)))
+    if pair_num_to_time:
+        all_times = [pair_num_to_time[k] for k in sorted(pair_num_to_time, key=lambda x: int(x))]
+    else:
+        all_times = sorted(list(set(l['time'] for day in schedule_data.values() for l in day)))
     military_day_name = military_day_info.get('day') if military_day_info else None
     military_day_image_uri = military_day_info.get('image_uri') if military_day_info else None
 
