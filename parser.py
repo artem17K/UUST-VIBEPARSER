@@ -14,22 +14,43 @@ def find_military_day(schedule_data: dict) -> str | None:
 
 
 def get_lesson_type(subject_str):
-    s = subject_str.lower()
-    if 'военная подготовка' in s or 'вуц' in s: return "Практика"
-    if 'лекция' in s or 'лек.' in s: return "Лекция"
-    if 'практика' in s or 'прак.' in s: return "Практика"
-    if 'семинар' in s: return "Семинар"
-    if 'лабораторная' in s or 'лаб.' in s: return "Лабораторная"
+    s = (subject_str or "").lower()
+    if 'военная подготовка' in s or 'вуц' in s:
+        return "Практика"
+    _, type_str = split_subject_and_type(subject_str)
+    t = type_str.lower()
+    if 'лекция' in t or 'лек.' in t: return "Лекция"
+    if 'практика' in t or 'прак.' in t: return "Практика"
+    if 'семинар' in t: return "Семинар"
+    if 'лабораторная' in t or 'лаб.' in t: return "Лабораторная"
     return "Другое"
 
 
 def get_subject_name(subject_full):
-    s_lower = subject_full.lower()
+    s_lower = (subject_full or "").lower()
     if 'военная подготовка' in s_lower or 'вуц' in s_lower:
         return "Военная подготовка"
-    match = re.match(r'(.+?)\s*\(.+\)', subject_full)
-    return match.groups()[0].strip() if match else subject_full.strip()
+    name, _ = split_subject_and_type(subject_full)
+    return name
 
+def split_subject_and_type(raw: str) -> tuple[str, str]:
+    s = (raw or "").strip()
+    if not s.endswith(')'):
+        return s, ''
+    depth = 0
+    for i in range(len(s) - 1, -1, -1):
+        ch = s[i]
+        if ch == ')':
+            depth += 1
+        elif ch == '(':
+            depth -= 1
+            if depth == 0:
+                name = s[:i].strip()
+                type_str = s[i + 1:-1].strip()
+                if not name:
+                    return s, ''
+                return name, type_str
+    return s, ''
 def apply_lab_alternation(final_schedule, current_week_number: int):
     def get_sg_num(lesson):
         sg_str = lesson.get('subgroup', '').lower()
@@ -129,8 +150,16 @@ def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> t
                 if not lines: continue
 
                 specific_time = None
-                if lines and re.match(r'^В \d{1,2}:\d{2}$', lines[-1].strip()):
-                    specific_time = lines.pop().strip()
+                if lines:
+                    last = lines[-1].strip().rstrip('.')
+                    m_pref = re.match(r'^[Вв]\s+(\d{1,2}:\d{2})$', last)
+                    m_bare = re.match(r'^(\d{1,2}:\d{2})$', last)
+                    if m_pref:
+                        specific_time = f"В {m_pref.group(1)}"
+                        lines.pop()
+                    elif m_bare:
+                        specific_time = f"В {m_bare.group(1)}"
+                        lines.pop()
 
                 subgroup = ""
                 cleaned_lines = []
@@ -142,8 +171,7 @@ def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> t
                 lines = cleaned_lines
 
                 raw_subject = lines.pop(0) if lines else ""
-                m = re.match(r'(.+?)\s*\(.+\)', raw_subject)
-                subject_clean_name = m.groups()[0].strip() if m else raw_subject.strip()
+                subject_clean_name, _ = split_subject_and_type(raw_subject)
 
                 teacher = lines.pop(0) if lines else ""
                 room_raw = " ".join(lines).strip()

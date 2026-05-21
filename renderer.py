@@ -1,6 +1,7 @@
 import imgkit
 import re
 from config import WKHTMLTOIMAGE_PATH
+from parser import split_subject_and_type
 
 def create_schedule_image(schedule_data, day_date_map, image_filename, military_day_info=None, pair_num_to_time=None):
     TIME_COL_WIDTH, DAY_COL_WIDTH = "80px", "550px"
@@ -46,12 +47,17 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
     military_day_image_uri = military_day_info.get('image_uri') if military_day_info else None
 
     def get_lesson_color_class(s):
-        s = s.lower()
-        if 'военная подготовка' in s: return 'military-lesson-bg'
-        if 'зачёт' in s or 'зачет' in s: return 'exam-bg'
-        if 'лекция' in s: return 'lecture-bg'
-        if 'практика' in s or 'семинар' in s: return 'practice-bg'
-        if 'лабораторная' in s: return 'lab-bg'
+        s_lower = (s or "").lower()
+        _, type_str = split_subject_and_type(s or "")
+        t = type_str.lower()
+
+        if 'военная подготовка' in s_lower:
+            return 'military-lesson-bg'
+        if any(k in t for k in ('зачёт', 'зачет', 'экзамен', 'защита', 'консультация', 'к/р', 'ргр')):
+            return 'exam-bg'
+        if 'лекция' in t: return 'lecture-bg'
+        if 'практика' in t or 'семинар' in t: return 'practice-bg'
+        if 'лабораторная' in t or 'лаб.' in t: return 'lab-bg'
         return 'default-bg'
 
     def format_room_text(s):
@@ -72,29 +78,29 @@ def create_schedule_image(schedule_data, day_date_map, image_filename, military_
         return " ".join(s.split())
 
     def get_lesson_type_formatted(type_str):
-        type_str_lower = type_str.lower()
-        if 'зачёт' in type_str_lower or 'зачет' in type_str_lower: return "(Зачёт)"
-        if 'лекция' in type_str_lower: return "(Лекция)"
-        if 'практика' in type_str_lower: return "(Практика)"
-        if 'семинар' in type_str_lower: return "(Семинар)"
-        if 'лабораторная' in type_str_lower: return "(Лаба)"
-        return ""
+        if not type_str:
+            return ""
+        s = type_str.strip()
+        if s.lower() in ('лабораторная', 'лабораторная работа'):
+            return "(Лаба)"
+        return f"({s})"
 
     def format_lesson_content(l):
         if 'военная подготовка' in l['subject'].lower():
             return f"<div style='padding-top: 20px; color: #000;'><span class='subject-text'><strong>Военная подготовка</strong></span></div>"
-        m = re.match(r'(.+?)\s*\((.+)\)', l['subject'])
-        subject_name, subject_type_raw = m.groups() if m else (l['subject'], '')
-        type_html = f"<br><span class='lesson-type-text'>{get_lesson_type_formatted(subject_type_raw)}</span>" if subject_type_raw else ""
+        subject_name, subject_type_raw = split_subject_and_type(l['subject'])
+        type_html = (f"<br><span class='lesson-type-text'>{get_lesson_type_formatted(subject_type_raw)}</span>"
+                     if subject_type_raw else "")
         room = format_room_text(l['room'])
         specific_time_html = f"<div class='specific-time'>{l['specific_time']}</div>" if l.get('specific_time') else ""
         room_html = f"<span class='room-text'>{room}</span>" if room else ""
-        separator = "" if (specific_time_html) else "<br>"
+        separator = "" if specific_time_html else "<br>"
         main_content_html = (
-            f"<br><span class='subject-text'><strong>{subject_name.strip()}</strong></span>"
+            f"<br><span class='subject-text'><strong>{subject_name.strip() or l['subject']}</strong></span>"
             f"{type_html}{specific_time_html}{separator}{room_html}"
         )
-        teacher_html = f"<div class='teacher-name'>{l['teacher']}</div>" if l.get('teacher') and l['teacher'].strip() not in ('N/A', '') else ""
+        teacher_html = (f"<div class='teacher-name'>{l['teacher']}</div>"
+                        if l.get('teacher') and l['teacher'].strip() not in ('N/A', '') else "")
         return main_content_html + teacher_html
 
     def generate_lesson_cell_html(lessons):
