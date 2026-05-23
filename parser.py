@@ -1,37 +1,37 @@
 import re
+from dataclasses import dataclass, asdict
 from bs4 import BeautifulSoup
-from config import SUBJECTS_TO_ALTERNATE
 
 
-def find_military_day(schedule_data: dict) -> str | None:
-    military_keywords = ["военная подготовка", "военная кафедра", "вуц"]
-    for day, lessons in schedule_data.items():
-        for lesson in lessons:
-            subject_lower = lesson.get("subject", "").lower()
-            if any(keyword in subject_lower for keyword in military_keywords):
-                return day
-    return None
+DAYS_ORDER = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+_TIME_PREFIXED_RE = re.compile(r'^[Вв]\s+(\d{1,2}:\d{2})$')
+_TIME_BARE_RE = re.compile(r'^(\d{1,2}:\d{2})$')
+_SUBGROUP_RE = re.compile(r'подгруппа\s*(\d+)', re.IGNORECASE)
+_APPEND_RE = re.compile(r"\$\('#(\d+_\d+_group)'\)\.append\('(.*?)'\);", re.DOTALL)
+_DAY_HEADER_RE = re.compile(r'([А-Яа-я]+).*?(\d{2}\.\d{2})')
 
 
-def get_lesson_type(subject_str):
-    s = (subject_str or "").lower()
-    if 'военная подготовка' in s or 'вуц' in s:
-        return "Практика"
-    _, type_str = split_subject_and_type(subject_str)
-    t = type_str.lower()
-    if 'лекция' in t or 'лек.' in t: return "Лекция"
-    if 'практика' in t or 'прак.' in t: return "Практика"
-    if 'семинар' in t: return "Семинар"
-    if 'лабораторная' in t or 'лаб.' in t: return "Лабораторная"
-    return "Другое"
+@dataclass
+class Lesson:
+    time: str
+    subject: str
+    subject_clean: str
+    teacher: str
+    room: str
+    specific_time: str | None = None
+    subgroup: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
-def get_subject_name(subject_full):
-    s_lower = (subject_full or "").lower()
-    if 'военная подготовка' in s_lower or 'вуц' in s_lower:
-        return "Военная подготовка"
-    name, _ = split_subject_and_type(subject_full)
-    return name
+@dataclass
+class ParsedSchedule:
+    days: dict
+    date_map: dict
+    pair_num_to_time: dict
+
 
 def split_subject_and_type(raw: str) -> tuple[str, str]:
     s = (raw or "").strip()
@@ -51,183 +51,247 @@ def split_subject_and_type(raw: str) -> tuple[str, str]:
                     return s, ''
                 return name, type_str
     return s, ''
-def apply_lab_alternation(final_schedule, current_week_number: int):
-    def get_sg_num(lesson):
-        sg_str = lesson.get('subgroup', '').lower()
-        if 'подгруппа 1' in sg_str: return 1
-        if 'подгруппа 2' in sg_str: return 2
-        return 0  # Нет подгруппы (или обе)
 
-    for day, lessons in final_schedule.items():
-        if len(lessons) < 2:
-            continue
 
-        sequence_counter = 0
+def find_military_day(schedule_data: dict) -> str | None:
+    keywords = ("военная подготовка", "военная кафедра", "вуц")
+    for day, lessons in schedule_data.items():
+        for lesson in lessons:
+            subject_lower = lesson.get("subject", "").lower()
+            if any(k in subject_lower for k in keywords):
+                return day
+    return None
 
-        i = 0
-        while i < len(lessons) - 1:
-            curr = lessons[i]
-            next_l = lessons[i + 1]
 
-            if (curr['subject_clean'] != next_l['subject_clean'] or
-                    curr['subject_clean'] not in SUBJECTS_TO_ALTERNATE):
-                i += 1
-                continue
+def get_lesson_type(subject_str: str) -> str:
+    s = (subject_str or "").lower()
+    if 'военная подготовка' in s or 'вуц' in s:
+        return "Практика"
+    _, type_str = split_subject_and_type(subject_str)
+    t = type_str.lower()
+    if 'лекция' in t or 'лек.' in t:
+        return "Лекция"
+    if 'практика' in t or 'прак.' in t:
+        return "Практика"
+    if 'семинар' in t:
+        return "Семинар"
+    if 'лабораторная' in t or 'лаб.' in t:
+        return "Лабораторная"
+    return "Другое"
 
-            if 'лаб' not in curr['subject'].lower() or 'лаб' not in next_l['subject'].lower():
-                i += 1
-                continue
 
-            sg1 = get_sg_num(curr)
-            sg2 = get_sg_num(next_l)
+def get_subject_name(subject_full: str) -> str:
+    s_lower = (subject_full or "").lower()
+    if 'военная подготовка' in s_lower or 'вуц' in s_lower:
+        return "Военная подготовка"
+    name, _ = split_subject_and_type(subject_full)
+    return name
 
-            if sg1 == 0 and sg2 == 0:
-                parity = (current_week_number + sequence_counter) % 2
-                start_sg = 1 if parity != 0 else 2
 
-                curr['subgroup'] = f'подгруппа {start_sg}'
-                next_l['subgroup'] = f'подгруппа {3 - start_sg}'
-
-                sequence_counter += 1
-            elif sg1 != 0 and sg2 == 0:
-                next_l['subgroup'] = f'подгруппа {3 - sg1}'
-
-            elif sg1 == 0 and sg2 != 0:
-                curr['subgroup'] = f'подгруппа {3 - sg2}'
-            i += 1
-
-    return final_schedule
-
-def parse_schedule_from_js(html_content: str, current_week_number: int = 1) -> tuple[dict, dict]:
-    soup = BeautifulSoup(html_content, "html.parser")
-    temp_schedule_data = {}
-    schedule_table = soup.find("table", class_="table table-bordered")
-    if not schedule_table: raise ValueError("Таблица расписания не найдена в HTML.")
-
-    headers = schedule_table.find("thead").find_all("th")
+def _extract_days(table) -> tuple[list[str], dict[str, str]]:
+    headers = table.find("thead").find_all("th")
     days = []
-    day_date_map = {}
-
+    date_map = {}
     for th in headers[2:]:
-        raw_text = th.get_text(strip=True)
-        match = re.match(r'([А-Яа-я]+).*?(\d{2}\.\d{2})', raw_text)
-        if match:
-            day_name, date_short = match.groups()
+        raw = th.get_text(strip=True)
+        m = _DAY_HEADER_RE.match(raw)
+        if m:
+            day_name, date_short = m.groups()
             days.append(day_name)
-            day_date_map[day_name] = date_short
+            date_map[day_name] = date_short
         else:
-            day_name = raw_text.split('(')[0].strip()
+            day_name = raw.split('(')[0].strip()
             days.append(day_name)
-            day_date_map[day_name] = ""
+            date_map[day_name] = ""
+    return days, date_map
 
+
+def _extract_pair_times(table) -> tuple[dict[str, str], dict[str, int]]:
     pair_num_to_time = {}
     time_to_pair_num = {}
-
-    rows = schedule_table.find_all("tr")
-    for r in rows:
-        cols = r.find_all("td")
+    for row in table.find_all("tr"):
+        cols = row.find_all("td")
         if len(cols) > 1 and cols[0].get_text(strip=True).isdigit():
             p_num = int(cols[0].get_text(strip=True))
             p_time = cols[1].get_text(strip=True)
             pair_num_to_time[str(p_num)] = p_time
             time_to_pair_num[p_time] = p_num
+    return pair_num_to_time, time_to_pair_num
 
-    pattern = re.compile(r"\$\('#(\d+_\d+_group)'\)\.append\('(.*?)'\);", re.DOTALL)
 
-    for script in soup.find_all("script"):
-        if not script.string: continue
-        for match in pattern.finditer(script.string):
-            cell_id, content_html = match.groups()
-            content_html = content_html.replace('\\/', '/')
-            pair_num_str, day_idx_str, _ = cell_id.split('_')
-            day_idx = int(day_idx_str) - 1
+def _extract_specific_time(lines: list[str]) -> str | None:
+    if not lines:
+        return None
+    last = lines[-1].strip().rstrip('.')
+    m_pref = _TIME_PREFIXED_RE.match(last)
+    if m_pref:
+        lines.pop()
+        return f"В {m_pref.group(1)}"
+    m_bare = _TIME_BARE_RE.match(last)
+    if m_bare:
+        lines.pop()
+        return f"В {m_bare.group(1)}"
+    return None
 
-            if day_idx < len(days) and pair_num_str in pair_num_to_time:
-                day_name = days[day_idx]
-                lesson_soup = BeautifulSoup(content_html, "html.parser")
 
-                lines = [line for line in lesson_soup.get_text(separator='\n', strip=True).split('\n') if line]
-                if not lines: continue
+def _extract_subgroup(lines: list[str]) -> tuple[int, list[str]]:
+    subgroup = 0
+    cleaned = []
+    for line in lines:
+        m = _SUBGROUP_RE.search(line)
+        if m:
+            subgroup = int(m.group(1))
+        else:
+            cleaned.append(line)
+    return subgroup, cleaned
 
-                specific_time = None
-                if lines:
-                    last = lines[-1].strip().rstrip('.')
-                    m_pref = re.match(r'^[Вв]\s+(\d{1,2}:\d{2})$', last)
-                    m_bare = re.match(r'^(\d{1,2}:\d{2})$', last)
-                    if m_pref:
-                        specific_time = f"В {m_pref.group(1)}"
-                        lines.pop()
-                    elif m_bare:
-                        specific_time = f"В {m_bare.group(1)}"
-                        lines.pop()
 
-                subgroup = ""
-                cleaned_lines = []
-                for line in lines:
-                    if re.search(r'подгруппа\s*\d+', line, re.IGNORECASE):
-                        subgroup = line.strip().lower()
-                    else:
-                        cleaned_lines.append(line)
-                lines = cleaned_lines
+def _parse_lesson_block(content_html: str, time_str: str) -> Lesson | None:
+    soup = BeautifulSoup(content_html, "html.parser")
 
-                raw_subject = lines.pop(0) if lines else ""
-                subject_clean_name, _ = split_subject_and_type(raw_subject)
+    teacher = ""
+    room = ""
+    for button in soup.find_all('button', class_='link-button'):
+        onclick = button.get('onclick', '')
+        btn_text = button.get_text(strip=True)
+        if 'link_teacher' in onclick:
+            teacher = btn_text
+        elif 'link_class' in onclick:
+            room = btn_text
+        button.extract()
 
-                teacher = lines.pop(0) if lines else ""
-                room_raw = " ".join(lines).strip()
+    lines = [ln for ln in soup.get_text(separator='\n', strip=True).split('\n') if ln.strip()]
+    if not lines:
+        return None
 
-                lesson = {
-                    "time": pair_num_to_time[pair_num_str],
-                    "subject": raw_subject,
-                    "subject_clean": subject_clean_name,
-                    "teacher": teacher,
-                    "room": room_raw,
-                    "specific_time": specific_time,
-                    "subgroup": subgroup
-                }
+    specific_time = _extract_specific_time(lines)
+    subgroup, lines = _extract_subgroup(lines)
 
-                if 'дистант' in lesson_soup.get_text().lower():
-                    lesson['room'] = 'Дистант'
+    raw_subject = lines.pop(0) if lines else ""
+    subject_clean, _ = split_subject_and_type(raw_subject)
 
-                temp_schedule_data.setdefault(day_name, []).append(lesson)
+    if 'дистант' in content_html.lower():
+        room = 'Дистант'
 
-    for day in temp_schedule_data:
-        lessons_by_time = {}
-        for l in temp_schedule_data[day]:
-            lessons_by_time.setdefault(l['time'], []).append(l)
+    return Lesson(
+        time=time_str,
+        subject=raw_subject,
+        subject_clean=subject_clean,
+        teacher=teacher,
+        room=room,
+        specific_time=specific_time,
+        subgroup=subgroup,
+    )
 
-        sorted_times = sorted(lessons_by_time.keys(), key=lambda t: time_to_pair_num.get(t, 0))
 
-        daily_subject_assignments = {}
+def _assign_split_subgroups(temp: dict[str, list[Lesson]],
+                            time_to_pair_num: dict[str, int],
+                            current_week: int) -> None:
+    for day, lessons in temp.items():
+        by_time: dict[str, list[Lesson]] = {}
+        for l in lessons:
+            by_time.setdefault(l.time, []).append(l)
+
+        sorted_times = sorted(by_time.keys(), key=lambda t: time_to_pair_num.get(t, 0))
+        daily_assigned: dict[str, int] = {}
         split_counter = 0
 
         for t in sorted_times:
-            lessons = lessons_by_time[t]
-            if len(lessons) == 2 and not lessons[0]['subgroup'] and not lessons[1]['subgroup']:
-                split_counter += 1
-                lessons.sort(key=lambda x: x['subject_clean'])
-                sub1, sub2 = lessons[0], lessons[1]
-                sub1_prev_sg = daily_subject_assignments.get(sub1['subject_clean'])
-                sub2_prev_sg = daily_subject_assignments.get(sub2['subject_clean'])
-                first_subject_sg = -1
+            pair_lessons = by_time[t]
+            if len(pair_lessons) != 2:
+                continue
+            if pair_lessons[0].subgroup or pair_lessons[1].subgroup:
+                continue
 
-                if sub1_prev_sg:
-                    first_subject_sg = 3 - sub1_prev_sg
-                elif sub2_prev_sg:
-                    first_subject_sg = sub2_prev_sg
-                else:
-                    parity = (int(current_week_number) + split_counter) % 2
-                    first_subject_sg = 1 if parity == 0 else 2
-                sub1['subgroup'] = f"подгруппа {first_subject_sg}"
-                sub2['subgroup'] = f"подгруппа {3 - first_subject_sg}"
+            split_counter += 1
+            pair_lessons.sort(key=lambda x: x.subject_clean)
+            a, b = pair_lessons
+            prev_a = daily_assigned.get(a.subject_clean)
+            prev_b = daily_assigned.get(b.subject_clean)
 
-                daily_subject_assignments[sub1['subject_clean']] = first_subject_sg
-                daily_subject_assignments[sub2['subject_clean']] = 3 - first_subject_sg
+            if prev_a:
+                first = 3 - prev_a
+            elif prev_b:
+                first = prev_b
+            else:
+                first = 1 if (current_week + split_counter) % 2 == 0 else 2
 
-    DAYS_ORDER = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-    final_schedule = {day: sorted(temp_schedule_data.get(day, []), key=lambda x: x['time']) for day in DAYS_ORDER if
-                      day in temp_schedule_data or day in day_date_map}
+            a.subgroup = first
+            b.subgroup = 3 - first
+            daily_assigned[a.subject_clean] = first
+            daily_assigned[b.subject_clean] = 3 - first
 
-    final_schedule = apply_lab_alternation(final_schedule, int(current_week_number))
 
-    return final_schedule, day_date_map, pair_num_to_time
+def _apply_lab_alternation(schedule: dict[str, list[Lesson]],
+                           current_week: int,
+                           alternation_subjects: list[str]) -> None:
+    if not alternation_subjects:
+        return
+    alt_set = set(alternation_subjects)
+    for day, lessons in schedule.items():
+        if len(lessons) < 2:
+            continue
+        seq = 0
+        i = 0
+        while i < len(lessons) - 1:
+            curr, nxt = lessons[i], lessons[i + 1]
+            same_subject = (curr.subject_clean == nxt.subject_clean
+                            and curr.subject_clean in alt_set)
+            both_lab = 'лаб' in curr.subject.lower() and 'лаб' in nxt.subject.lower()
+            if not (same_subject and both_lab):
+                i += 1
+                continue
+
+            sg1, sg2 = curr.subgroup, nxt.subgroup
+            if sg1 == 0 and sg2 == 0:
+                first = 1 if (current_week + seq) % 2 != 0 else 2
+                curr.subgroup = first
+                nxt.subgroup = 3 - first
+                seq += 1
+            elif sg1 and not sg2:
+                nxt.subgroup = 3 - sg1
+            elif sg2 and not sg1:
+                curr.subgroup = 3 - sg2
+            i += 1
+
+
+def parse_schedule_from_js(
+    html_content: str,
+    current_week_number: int = 1,
+    alternation_subjects: list[str] | None = None,
+) -> ParsedSchedule:
+    soup = BeautifulSoup(html_content, "html.parser")
+    table = soup.find("table", class_="table table-bordered")
+    if not table:
+        raise ValueError("Таблица расписания не найдена в HTML.")
+
+    days, date_map = _extract_days(table)
+    pair_num_to_time, time_to_pair_num = _extract_pair_times(table)
+
+    temp: dict[str, list[Lesson]] = {}
+    for script in soup.find_all("script"):
+        if not script.string:
+            continue
+        for m in _APPEND_RE.finditer(script.string):
+            cell_id, content_html = m.groups()
+            content_html = content_html.replace('\\/', '/')
+            pair_num_str, day_idx_str, _ = cell_id.split('_')
+            day_idx = int(day_idx_str) - 1
+            if day_idx >= len(days) or pair_num_str not in pair_num_to_time:
+                continue
+            lesson = _parse_lesson_block(content_html, pair_num_to_time[pair_num_str])
+            if lesson:
+                temp.setdefault(days[day_idx], []).append(lesson)
+
+    week = int(current_week_number)
+    _assign_split_subgroups(temp, time_to_pair_num, week)
+
+    final: dict[str, list[Lesson]] = {
+        day: sorted(temp.get(day, []), key=lambda x: time_to_pair_num.get(x.time, 0))
+        for day in DAYS_ORDER
+        if day in temp or day in date_map
+    }
+    _apply_lab_alternation(final, week, alternation_subjects or [])
+
+    days_as_dicts = {day: [l.to_dict() for l in lessons] for day, lessons in final.items()}
+    return ParsedSchedule(days=days_as_dicts, date_map=date_map, pair_num_to_time=pair_num_to_time)
