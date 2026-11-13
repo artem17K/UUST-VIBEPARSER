@@ -4,29 +4,37 @@ import mimetypes
 from datetime import date, timedelta
 from config import JSON_DIR
 
-
 SECOND_SEMESTER_START_WEEK = 24
+
+
+def get_academic_year_start(year: int) -> date:
+    sep_1 = date(year, 9, 1)
+    return sep_1 - timedelta(days=sep_1.weekday())
+
+
+def get_current_academic_year_start() -> date:
+    today = date.today()
+    current_year_start = get_academic_year_start(today.year)
+    if today < current_year_start:
+        return get_academic_year_start(today.year - 1)
+    return current_year_start
 
 
 def calculate_academic_week() -> int:
     today = date.today()
-    if today.month >= 9:
-        year_start_date = date(today.year, 9, 1)
-    else:
-        year_start_date = date(today.year - 1, 9, 1)
-    start_of_semester = year_start_date - timedelta(days=year_start_date.weekday())
+    start_of_semester = get_current_academic_year_start()
     days_passed = (today - start_of_semester).days
     return (days_passed // 7) + 1
 
 
-def get_week_date_range(week_number: int) -> str:
-    today = date.today()
-    if today.month >= 9:
-        year_start_date = date(today.year, 9, 1)
-    else:
-        year_start_date = date(today.year - 1, 9, 1)
-    semester_start_monday = year_start_date - timedelta(days=year_start_date.weekday())
-    target_monday = semester_start_monday + timedelta(weeks=week_number - 1)
+def get_week_date_range(week_number: int, year_offset: int = 0) -> str:
+    start_of_semester = get_current_academic_year_start()
+
+    # Смещаем учебный год, если запрошена неделя из следующего года
+    if year_offset != 0:
+        start_of_semester = get_academic_year_start(start_of_semester.year + year_offset)
+
+    target_monday = start_of_semester + timedelta(weeks=week_number - 1)
     target_sunday = target_monday + timedelta(days=6)
     return f"{target_monday.strftime('%d.%m.%Y')} - {target_sunday.strftime('%d.%m.%Y')}"
 

@@ -3,7 +3,6 @@ import imgkit
 from config import WKHTMLTOIMAGE_PATH
 from parser import split_subject_and_type
 
-
 STYLE = """<style>
     body{font-family:'Tahoma',sans-serif;background-color:#fff;margin:0;padding:0}
     .multi-day-table{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -49,10 +48,12 @@ def _lesson_subgroup(lesson: dict) -> int:
 
 def _get_lesson_color_class(subject: str) -> str:
     s_lower = (subject or "").lower()
+    if any(k in s_lower for k in ('военная подготовка', 'военная кафедра', 'вуц')):
+        return 'military-lesson-bg'
+
     _, type_str = split_subject_and_type(subject or "")
     t = type_str.lower()
-    if 'военная подготовка' in s_lower:
-        return 'military-lesson-bg'
+
     if any(k in t for k in _EXAM_KEYWORDS):
         return 'exam-bg'
     if 'лекция' in t:
@@ -96,9 +97,11 @@ def _format_lesson_type(type_str: str) -> str:
 
 
 def _format_lesson_content(lesson: dict) -> str:
-    if 'военная подготовка' in lesson['subject'].lower():
+    s_lower = lesson['subject'].lower()
+    if any(k in s_lower for k in ('военная подготовка', 'военная кафедра', 'вуц')):
         return ("<div style='padding-top: 20px; color: #000;'>"
                 "<span class='subject-text'><strong>Военная подготовка</strong></span></div>")
+
     subject_name, type_raw = split_subject_and_type(lesson['subject'])
     type_html = (f"<br><span class='lesson-type-text'>{_format_lesson_type(type_raw)}</span>"
                  if type_raw else "")
@@ -158,18 +161,25 @@ def _generate_days_row(days, data, times, is_top, date_map, military_day, milita
         parts.append("</tbody></table>")
         return ''.join(parts)
 
-    mil_added = False
-    for t in times:
+    mil_spans = (
+        _compute_military_spans(data.get(military_day, []), times)
+        if military_day and military_uri and military_day in days
+        else {}
+    )
+
+    for row_idx, t in enumerate(times):
         parts.append('<tr class="lesson-row">')
         for i, d in enumerate(days):
             if d == military_day and military_uri:
-                if not mil_added:
-                    rowspan = len(times) if times else 1
+                span = mil_spans.get(row_idx)
+                if span == 'skip':
+                    continue
+                if isinstance(span, int):
                     border = "thick-border-right" if i < len(days) - 1 else ""
-                    parts.append(f'<td colspan="2" rowspan="{rowspan}" class="image-cell {border}" '
+                    parts.append(f'<td colspan="2" rowspan="{span}" class="image-cell {border}" '
                                  f'style="background-image:url({military_uri});"></td>')
-                    mil_added = True
-                continue
+                    continue
+
             parts.append(f'<td class="time-cell">{t.replace("-", "<br>-<br>")}</td>')
             ls = [l for l in data.get(d, []) if l['time'] == t]
             ls.sort(key=_lesson_subgroup)
@@ -207,8 +217,8 @@ def create_schedule_image(schedule_data, day_date_map, image_filename,
     vis_bot = _visible_times(bottom, all_times, schedule_data)
 
     body = (
-        _generate_days_row(top, schedule_data, vis_top, True, day_date_map, mil_day, mil_uri, time_w, day_w)
-        + _generate_days_row(bottom, schedule_data, vis_bot, False, day_date_map, mil_day, mil_uri, time_w, day_w)
+            _generate_days_row(top, schedule_data, vis_top, True, day_date_map, mil_day, mil_uri, time_w, day_w)
+            + _generate_days_row(bottom, schedule_data, vis_bot, False, day_date_map, mil_day, mil_uri, time_w, day_w)
     )
     full = f"<!DOCTYPE html><html><head><meta charset='UTF-8'>{STYLE}</head><body>{body}</body></html>"
 
@@ -219,3 +229,39 @@ def create_schedule_image(schedule_data, day_date_map, image_filename,
     except Exception as e:
         print(f"❌ Ошибка при создании изображения: {e}\n"
               f"    Убедись, что путь в WKHTMLTOIMAGE_PATH указан верно.")
+
+def _is_military_lesson(lesson: dict) -> bool:
+    s_lower = (lesson.get('subject') or '').lower()
+    return any(k in s_lower for k in ('военная подготовка', 'военная кафедра', 'вуц'))
+
+
+def _compute_military_spans(day_lessons: list[dict], times: list[str]) -> dict[int, int | str]:
+    if not times:
+        return {}
+
+    has_non_mil = any(not _is_military_lesson(l) for l in day_lessons)
+    if not has_non_mil:
+        spans: dict[int, int | str] = {0: len(times)}
+        for idx in range(1, len(times)):
+            spans[idx] = 'skip'
+        return spans
+
+    is_mil_slot = []
+    for t in times:
+        slot_lessons = [l for l in day_lessons if l['time'] == t]
+        is_mil_slot.append(bool(slot_lessons) and all(_is_military_lesson(l) for l in slot_lessons))
+
+    spans = {}
+    i = 0
+    while i < len(times):
+        if is_mil_slot[i]:
+            end = i
+            while end + 1 < len(times) and is_mil_slot[end + 1]:
+                end += 1
+            spans[i] = end - i + 1
+            for k in range(i + 1, end + 1):
+                spans[k] = 'skip'
+            i = end + 1
+        else:
+            i += 1
+    return spans

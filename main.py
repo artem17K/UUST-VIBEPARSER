@@ -9,6 +9,7 @@ from config import (
 from utils import (
     calculate_academic_week, get_week_date_range, image_to_base64_uri,
     cleanup_old_files, get_latest_schedule_file,
+    get_current_academic_year_start, get_academic_year_start
 )
 from api import get_group_id, get_schedule_html, make_session
 from parser import parse_schedule_from_js, find_military_day
@@ -19,17 +20,26 @@ from stats import count_all_classes, compare_schedules
 def choose_week_interaction() -> str | None:
     try:
         current = calculate_academic_week()
+        year_start = get_current_academic_year_start()
+        next_year_start = get_academic_year_start(year_start.year + 1)
+        total_weeks = (next_year_start - year_start).days // 7
+
     except Exception as e:
         print(f"❌ Не удалось рассчитать номер текущей недели: {e}")
         return None
 
     nxt = current + 1
+    nxt_year_offset = 0
+    if nxt > total_weeks:
+        nxt = 1
+        nxt_year_offset = 1
+
     print("\n" + "=" * 50)
     print(f"🗓️  Сейчас идет {current}-я неделя")
     print("=" * 50)
     print("Выберите неделю для загрузки:")
     print(f"  1. Текущая неделя (№ {current}) [{get_week_date_range(current)}]")
-    print(f"  2. Следующая неделя (№ {nxt}) [{get_week_date_range(nxt)}]")
+    print(f"  2. Следующая неделя (№ {nxt}) [{get_week_date_range(nxt, nxt_year_offset)}]")
     print(f"  3. Выбрать конкретную неделю (из списка)")
     print("=" * 50)
 
@@ -40,14 +50,14 @@ def choose_week_interaction() -> str | None:
         if choice == '2':
             return str(nxt)
         if choice == '3':
-            return _pick_specific_week(current)
+            return _pick_specific_week(current, total_weeks)
         print("❗️Неверный ввод. Пожалуйста, введите 1, 2 или 3.")
 
 
-def _pick_specific_week(current_week: int) -> str:
+def _pick_specific_week(current_week: int, total_weeks: int) -> str:
     print("\n📋 Список учебных недель:")
     print("-" * 40)
-    max_show = 26 if current_week < 24 else 52
+    max_show = 26 if current_week < 24 else total_weeks
     for w in range(1, max_show + 1):
         marker = "👉" if w == current_week else "  "
         print(f"{marker} Неделя {w:<2} : {get_week_date_range(w)}")
@@ -77,7 +87,6 @@ def _prepare_military_info(schedule: dict) -> dict:
     if uri:
         print("🖼️ Используется изображение для дня военной кафедры.")
         info['image_uri'] = uri
-        schedule[day] = []
     else:
         print("⚠️ Не удалось загрузить изображение.")
         info['image_uri'] = None

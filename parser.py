@@ -2,7 +2,6 @@ import re
 from dataclasses import dataclass, asdict
 from bs4 import BeautifulSoup
 
-
 DAYS_ORDER = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
 _TIME_PREFIXED_RE = re.compile(r'^[Вв]\s+(\d{1,2}:\d{2})$')
@@ -35,10 +34,15 @@ class ParsedSchedule:
 
 def split_subject_and_type(raw: str) -> tuple[str, str]:
     s = (raw or "").strip()
-    if not s.endswith(')'):
+    if not s:
         return s, ''
+
+    end_idx = s.rfind(')')
+    if end_idx == -1:
+        return s, ''
+
     depth = 0
-    for i in range(len(s) - 1, -1, -1):
+    for i in range(end_idx, -1, -1):
         ch = s[i]
         if ch == ')':
             depth += 1
@@ -46,10 +50,16 @@ def split_subject_and_type(raw: str) -> tuple[str, str]:
             depth -= 1
             if depth == 0:
                 name = s[:i].strip()
-                type_str = s[i + 1:-1].strip()
+                type_str = s[i + 1:end_idx].strip()
+                trailing = s[end_idx + 1:].strip()
+
                 if not name:
                     return s, ''
+                if trailing:
+                    name += " " + trailing
+
                 return name, type_str
+
     return s, ''
 
 
@@ -158,6 +168,8 @@ def _parse_lesson_block(content_html: str, time_str: str) -> Lesson | None:
             teacher = btn_text
         elif 'link_class' in onclick:
             room = btn_text
+            if "Уточняется" in room:
+                room = "Уточняется"
         button.extract()
 
     lines = [ln for ln in soup.get_text(separator='\n', strip=True).split('\n') if ln.strip()]
@@ -167,11 +179,13 @@ def _parse_lesson_block(content_html: str, time_str: str) -> Lesson | None:
     specific_time = _extract_specific_time(lines)
     subgroup, lines = _extract_subgroup(lines)
 
+    lines = [ln for ln in lines if ln.lower() not in ('дистанционно', 'дистант')]
+
     raw_subject = lines.pop(0) if lines else ""
     subject_clean, _ = split_subject_and_type(raw_subject)
 
-    if 'дистант' in content_html.lower():
-        room = 'Дистант'
+    if lines:
+        raw_subject += " " + " ".join(lines)
 
     return Lesson(
         time=time_str,
@@ -256,9 +270,9 @@ def _apply_lab_alternation(schedule: dict[str, list[Lesson]],
 
 
 def parse_schedule_from_js(
-    html_content: str,
-    current_week_number: int = 1,
-    alternation_subjects: list[str] | None = None,
+        html_content: str,
+        current_week_number: int = 1,
+        alternation_subjects: list[str] | None = None,
 ) -> ParsedSchedule:
     soup = BeautifulSoup(html_content, "html.parser")
     table = soup.find("table", class_="table table-bordered")
