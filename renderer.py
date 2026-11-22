@@ -76,11 +76,15 @@ def _format_room_text(s: str) -> str:
     s = re.sub(r'подгруппа\s*\d+', '', s, flags=re.IGNORECASE)
     s = re.sub(r'[\s-]*уточняется', '', s, flags=re.IGNORECASE)
     if 'заки валиди 32/1' in s_lower:
+        m = re.search(r'заки валиди 32/1\s*\)?\s*-\s*(\d+[а-яА-Я]?)', s, flags=re.IGNORECASE)
+        if m:
+            rest = s[m.end():].strip(' ,')
+            return f"Ауд. {m.group(1)}" + (f" ({rest})" if rest else "")
         n = re.findall(r'\d+[а-яА-Я]?', s)
         return f"Ауд. {n[-1]}" if n else "Физмат"
     s = s.replace('(', ' ').replace(')', ' ')
-    if '-' in s:
-        parts = s.rsplit('-', 1)
+    if ' - ' in s:
+        parts = s.rsplit(' - ', 1)
         address, room = parts[0].strip(), parts[1].strip()
         if re.match(r'^\d+[а-яА-Я]?$', room):
             return f"{' '.join(address.split())} ауд. {room}"

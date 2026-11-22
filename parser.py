@@ -9,6 +9,7 @@ _TIME_BARE_RE = re.compile(r'^(\d{1,2}:\d{2})$')
 _SUBGROUP_RE = re.compile(r'подгруппа\s*(\d+)', re.IGNORECASE)
 _APPEND_RE = re.compile(r"\$\('#(\d+_\d+_group)'\)\.append\('(.*?)'\);", re.DOTALL)
 _DAY_HEADER_RE = re.compile(r'([А-Яа-я]+).*?(\d{2}\.\d{2})')
+_MILITARY_NOTE_RE = re.compile(r'вуц|военн', re.IGNORECASE)
 
 
 @dataclass
@@ -184,8 +185,18 @@ def _parse_lesson_block(content_html: str, time_str: str) -> Lesson | None:
     raw_subject = lines.pop(0) if lines else ""
     subject_clean, _ = split_subject_and_type(raw_subject)
 
-    if lines:
-        raw_subject += " " + " ".join(lines)
+    military_lines = [ln for ln in lines if _MILITARY_NOTE_RE.search(ln)]
+    extra_lines = [ln for ln in lines if not _MILITARY_NOTE_RE.search(ln)]
+
+    if military_lines:
+        raw_subject += " " + " ".join(military_lines)
+
+    if extra_lines:
+        extra_text = " ".join(extra_lines)
+        if not room or room == "Уточняется":
+            room = extra_text
+        else:
+            room = f"{room}, {extra_text}"
 
     return Lesson(
         time=time_str,
@@ -208,6 +219,7 @@ def _assign_split_subgroups(temp: dict[str, list[Lesson]],
 
         sorted_times = sorted(by_time.keys(), key=lambda t: time_to_pair_num.get(t, 0))
         daily_assigned: dict[str, int] = {}
+        daily_teacher_assigned: dict[tuple[str, str], int] = {}
         split_counter = 0
 
         for t in sorted_times:
@@ -220,6 +232,22 @@ def _assign_split_subgroups(temp: dict[str, list[Lesson]],
             split_counter += 1
             pair_lessons.sort(key=lambda x: x.subject_clean)
             a, b = pair_lessons
+
+            if a.subject_clean == b.subject_clean:
+                prev_a = daily_teacher_assigned.get((a.subject_clean, a.teacher))
+                prev_b = daily_teacher_assigned.get((b.subject_clean, b.teacher))
+                if prev_a:
+                    first = prev_a
+                elif prev_b:
+                    first = 3 - prev_b
+                else:
+                    first = 1 if (current_week + split_counter) % 2 == 0 else 2
+                a.subgroup = first
+                b.subgroup = 3 - first
+                daily_teacher_assigned[(a.subject_clean, a.teacher)] = first
+                daily_teacher_assigned[(b.subject_clean, b.teacher)] = 3 - first
+                continue
+
             prev_a = daily_assigned.get(a.subject_clean)
             prev_b = daily_assigned.get(b.subject_clean)
 
@@ -234,7 +262,6 @@ def _assign_split_subgroups(temp: dict[str, list[Lesson]],
             b.subgroup = 3 - first
             daily_assigned[a.subject_clean] = first
             daily_assigned[b.subject_clean] = 3 - first
-
 
 def _apply_lab_alternation(schedule: dict[str, list[Lesson]],
                            current_week: int,
